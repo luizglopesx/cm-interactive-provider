@@ -102,6 +102,22 @@ e WhatsApp Business App não conseguem mais enviá-lo. Mesmo bloqueio afeta o Ev
 - Para listas verdadeiras: precisaria de conta na WhatsApp Business Platform (Cloud API),
   que não passa por essa restrição.
 
+## Validações de payload (paridade com Evolution 2.3.7)
+
+Para evitar `200 success` mentiroso (mensagem aceita pela API mas filtrada silenciosamente
+pelo servidor da Meta), os endpoints rejeitam combinações inválidas com `400` antes do envio:
+
+`POST /send/button`:
+- ≥ 1 botão obrigatório
+- `reply` máx 3, e não pode misturar com outros tipos
+- CTA (`url`/`call`/`copy`) máx 2 — paridade com Evolution 2.3.7
+- `pix` máx 1 e não pode misturar com outros tipos
+
+`POST /send/carousel`:
+- ≥ 1 card e ≤ 10 cards
+- Cada card: ≥ 1 botão e ≤ 3 botões
+- `pix` não é suportado dentro de cards de carrossel (renderização não funciona)
+
 ### Sender → recipient delivery matrix
 
 | Sender | Cliente do recipient | Botão | Lista | Carrossel |

@@ -1697,10 +1697,15 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 		return nil, err
 	}
 
+	if len(data.Buttons) == 0 {
+		return nil, errors.New("pelo menos um botão é obrigatório")
+	}
+
 	hasReply := false
 	hasPix := false
 	hasOtherTypes := false
 	replyCount := 0
+	ctaCount := 0
 
 	for _, v := range data.Buttons {
 		switch v.Type {
@@ -1709,6 +1714,9 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 			replyCount++
 		case "pix":
 			hasPix = true
+		case "url", "call", "copy":
+			hasOtherTypes = true
+			ctaCount++
 		default:
 			hasOtherTypes = true
 		}
@@ -1721,6 +1729,11 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 		if hasOtherTypes {
 			return nil, errors.New("botões do tipo 'reply' não podem ser misturados com outros tipos")
 		}
+	}
+
+	// CTA limit (paridade com Evolution 2.3.7): máx 2 botões CTA por mensagem.
+	if ctaCount > 2 {
+		return nil, errors.New("máximo de 2 botões CTA (url/call/copy) permitidos")
 	}
 
 	if hasPix {
@@ -1808,13 +1821,9 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 			}
 		}
 
-		// Header with title
-		if data.Title != "" {
-			interactiveMsg.Header = &waE2E.InteractiveMessage_Header{
-				Title:              proto.String(data.Title),
-				HasMediaAttachment: proto.Bool(false),
-			}
-		}
+		// Header não é criado quando não há mídia anexada (paridade com Evolution 2.3.7,
+		// que só seta header com `imageMessage` quando há `thumbnailUrl`). O título já vai
+		// em negrito no início do body.
 
 		msg = &waE2E.Message{
 			InteractiveMessage: interactiveMsg,
@@ -2510,6 +2519,27 @@ func (s *sendService) SendCarousel(data *CarouselStruct, instance *instance_mode
 	client, err := s.ensureClientConnected(instance.Id)
 	if err != nil {
 		return nil, err
+	}
+
+	// Validações (paridade com Evolution 2.3.7 carouselMessage):
+	if len(data.Cards) == 0 {
+		return nil, errors.New("pelo menos um card é obrigatório")
+	}
+	if len(data.Cards) > 10 {
+		return nil, errors.New("máximo de 10 cards permitidos no carrossel")
+	}
+	for i, card := range data.Cards {
+		if len(card.Buttons) == 0 {
+			return nil, fmt.Errorf("card %d: cada card precisa ter pelo menos um botão", i+1)
+		}
+		if len(card.Buttons) > 3 {
+			return nil, fmt.Errorf("card %d: máximo de 3 botões por card", i+1)
+		}
+		for _, btn := range card.Buttons {
+			if strings.EqualFold(btn.Type, "PIX") {
+				return nil, fmt.Errorf("card %d: botões do tipo PIX não são suportados em carrossel", i+1)
+			}
+		}
 	}
 
 	formatJid := true
