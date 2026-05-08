@@ -27,6 +27,7 @@ import (
 	"github.com/chai2010/webp"
 	"github.com/gabriel-vasile/mimetype"
 	"go.mau.fi/whatsmeow"
+	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"golang.org/x/net/html"
@@ -1840,7 +1841,26 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 		}
 	}
 
-	response, err := client.SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: messageId})
+	bizNode := waBinary.Node{
+		Tag:   "biz",
+		Attrs: waBinary.Attrs{},
+		Content: []waBinary.Node{
+			{
+				Tag:   "interactive",
+				Attrs: waBinary.Attrs{"type": "native_flow", "v": "1"},
+				Content: []waBinary.Node{
+					{Tag: "native_flow", Attrs: waBinary.Attrs{"v": "9", "name": "mixed"}},
+				},
+			},
+		},
+	}
+	nodes := []waBinary.Node{bizNode}
+	sendExtra := whatsmeow.SendRequestExtra{
+		ID:              messageId,
+		AdditionalNodes: &nodes,
+	}
+
+	response, err := client.SendMessage(context.Background(), recipient, msg, sendExtra)
 	if err != nil {
 		return nil, err
 	}
@@ -2332,6 +2352,34 @@ func (s *sendService) SendMessage(instance *instance_model.Instance, msg *waE2E.
 		s.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] Newsletter detected, using MediaHandle: %s", instance.Id, data.MediaHandle)
 	}
 
+	// Injetar nó <biz> para mensagens interativas (botão/carrossel) — necessário para que
+	// o WhatsApp entregue NativeFlowMessage. Equivalente ao buildInteractiveBizNode do
+	// Evolution API 2.3.7 (Node.js/Baileys).
+	//
+	// IMPORTANTE: NÃO injetar biz/list para ListMessage. Ao contrário do Baileys (Node.js),
+	// o whatsmeow já injeta automaticamente o <biz><list v="2" type="single_select"/></biz>
+	// em send.go:1137-1145 (getButtonTypeFromMessage). Adicionar via AdditionalNodes resulta
+	// em dois <biz> duplicados no stanza — o servidor responde com error 479 (smax-invalid).
+	switch messageType {
+	case "InteractiveMessage":
+		bizNode := waBinary.Node{
+			Tag:   "biz",
+			Attrs: waBinary.Attrs{},
+			Content: []waBinary.Node{
+				{
+					Tag:   "interactive",
+					Attrs: waBinary.Attrs{"type": "native_flow", "v": "1"},
+					Content: []waBinary.Node{
+						{Tag: "native_flow", Attrs: waBinary.Attrs{"v": "9", "name": "mixed"}},
+					},
+				},
+			},
+		}
+		nodes := []waBinary.Node{bizNode}
+		sendExtra.AdditionalNodes = &nodes
+		s.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] Injecting biz/interactive node for InteractiveMessage", instance.Id)
+	}
+
 	response, err := s.clientPointer[instance.Id].SendMessage(context.Background(), recipient, msg, sendExtra)
 	if err != nil {
 		s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Error sending message: %v", instance.Id, err)
@@ -2489,20 +2537,21 @@ func (s *sendService) SendCarousel(data *CarouselStruct, instance *instance_mode
 	s.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] Building carousel for %s with %d cards", instance.Id, recipient.String(), len(data.Cards))
 
 	for i, card := range data.Cards {
-		// Each card MUST have both header and body for carousel to work
+		// Match Evolution 2.3.7 (Node.js/Baileys): each card has body required, footer optional,
+		// header ONLY when there is image/video. Title/Subtitle on per-card headers are dropped
+		// because they were preventing delivery (the card-level header in carousel only carries
+		// hasMediaAttachment + imageMessage/videoMessage).
 		interactiveCard := &waE2E.InteractiveMessage{
 			Body: &waE2E.InteractiveMessage_Body{
 				Text: proto.String(card.Body.Text),
 			},
-			Header: &waE2E.InteractiveMessage_Header{
-				Title:              proto.String(card.Header.Title),
-				Subtitle:           proto.String(card.Header.Subtitle),
-				HasMediaAttachment: proto.Bool(false),
-			},
 		}
 
-		// Add media to header if URL provided
+		// Add header with media only if URL provided
 		if card.Header.ImageUrl != "" || card.Header.VideoUrl != "" {
+			interactiveCard.Header = &waE2E.InteractiveMessage_Header{
+				HasMediaAttachment: proto.Bool(true),
+			}
 			header := interactiveCard.Header
 
 			if card.Header.ImageUrl != "" {
@@ -2579,6 +2628,12 @@ func (s *sendService) SendCarousel(data *CarouselStruct, instance *instance_mode
 						}
 					}
 				}
+			}
+
+			// Drop header entirely if upload failed (no Media attached). 2.3.7 keeps header
+			// undefined in that case rather than leaving an empty hasMediaAttachment placeholder.
+			if interactiveCard.Header != nil && interactiveCard.Header.Media == nil {
+				interactiveCard.Header = nil
 			}
 		}
 
@@ -2657,37 +2712,26 @@ func (s *sendService) SendCarousel(data *CarouselStruct, instance *instance_mode
 		}
 	}
 
-	// Add footer if provided (text below carousel)
-	if data.Footer != "" {
-		interactiveMsg.Footer = &waE2E.InteractiveMessage_Footer{
-			Text: proto.String(data.Footer),
-		}
-	}
+	// Match Evolution 2.3.7 carousel: top-level interactiveMessage carries only body +
+	// carouselMessage. Top-level Footer and ContextInfo were preventing delivery and are
+	// not part of the working reference structure.
 
-	// ContextInfo is REQUIRED for iOS compatibility
-	// Even if empty, iOS requires this field to display carousel
-	contextInfo := &waE2E.ContextInfo{}
-
-	// Add quoted message if exists
+	// Quoted reply support (only when actually present): attach via ContextInfo to keep
+	// the empty-ContextInfo case identical to 2.3.7 (which omits the field entirely).
 	if data.Quoted.MessageID != "" {
-		contextInfo.StanzaID = proto.String(data.Quoted.MessageID)
+		ctx := &waE2E.ContextInfo{
+			StanzaID: proto.String(data.Quoted.MessageID),
+		}
 		if data.Quoted.Participant != "" {
-			participantJID, ok := utils.ParseJID(data.Quoted.Participant)
-			if ok {
-				contextInfo.Participant = proto.String(participantJID.String())
+			if participantJID, ok := utils.ParseJID(data.Quoted.Participant); ok {
+				ctx.Participant = proto.String(participantJID.String())
 			}
 		}
+		interactiveMsg.ContextInfo = ctx
 	}
 
-	// Always set ContextInfo (required for iOS)
-	interactiveMsg.ContextInfo = contextInfo
-
-	// Build final message with MessageContextInfo for proper notification delivery
 	msg := &waE2E.Message{
 		InteractiveMessage: interactiveMsg,
-		MessageContextInfo: &waE2E.MessageContextInfo{
-			DeviceListMetadata: &waE2E.DeviceListMetadata{},
-		},
 	}
 
 	message, err := s.SendMessage(instance, msg, "InteractiveMessage", &SendDataStruct{

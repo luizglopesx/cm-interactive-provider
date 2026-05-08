@@ -1,8 +1,10 @@
-FROM golang:1.25.0-alpine AS build
+FROM golang:1.25-alpine AS build
 
 RUN apk update && apk add --no-cache git build-base libjpeg-turbo-dev libwebp-dev
 
 WORKDIR /build
+
+ENV GOTOOLCHAIN=auto
 
 # Copiar apenas arquivos de dependências primeiro para cachear o download
 COPY go.mod go.sum ./
