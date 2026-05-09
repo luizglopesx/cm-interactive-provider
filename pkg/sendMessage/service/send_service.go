@@ -212,6 +212,8 @@ type ButtonStruct struct {
 	Description  string       `json:"description" example:"Confira as condicoes abaixo"`
 	// Footer text (required).
 	Footer       string       `json:"footer" example:"Evolution GO"`
+	// Optional public URL to an image shown above the title in the button header.
+	ThumbnailUrl string       `json:"thumbnailUrl,omitempty" example:"https://picsum.photos/seed/offer/400/300"`
 	// Buttons array. See combination rules on the parent type description.
 	Buttons      []Button     `json:"buttons"`
 	// Typing delay (milliseconds) applied before sending the message.
@@ -1821,9 +1823,58 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 			}
 		}
 
-		// Header não é criado quando não há mídia anexada (paridade com Evolution 2.3.7,
-		// que só seta header com `imageMessage` quando há `thumbnailUrl`). O título já vai
-		// em negrito no início do body.
+		// Header com imagem quando thumbnailUrl é fornecido (paridade com Evolution 2.3.7)
+		if data.ThumbnailUrl != "" {
+			thumbResp, thumbErr := http.Get(data.ThumbnailUrl)
+			if thumbErr == nil {
+				defer thumbResp.Body.Close()
+				thumbData, thumbErr := io.ReadAll(thumbResp.Body)
+				if thumbErr == nil {
+					uploaded, uploadErr := client.Upload(context.Background(), thumbData, whatsmeow.MediaImage)
+					if uploadErr == nil {
+						// Generate JPEG thumbnail for iOS compatibility
+						var jpegThumb []byte
+						img, _, decErr := image.Decode(bytes.NewReader(thumbData))
+						if decErr == nil {
+							bounds := img.Bounds()
+							thumbWidth := 72
+							thumbHeight := int(float64(bounds.Dy()) * float64(thumbWidth) / float64(bounds.Dx()))
+							if thumbHeight < 1 {
+								thumbHeight = 1
+							}
+							thumbImg := image.NewRGBA(image.Rect(0, 0, thumbWidth, thumbHeight))
+							for y := 0; y < thumbHeight; y++ {
+								for x := 0; x < thumbWidth; x++ {
+									srcX := x * bounds.Dx() / thumbWidth
+									srcY := y * bounds.Dy() / thumbHeight
+									thumbImg.Set(x, y, img.At(srcX+bounds.Min.X, srcY+bounds.Min.Y))
+								}
+							}
+							var thumbBuf bytes.Buffer
+							if jpeg.Encode(&thumbBuf, thumbImg, &jpeg.Options{Quality: 50}) == nil {
+								jpegThumb = thumbBuf.Bytes()
+							}
+						}
+
+						interactiveMsg.Header = &waE2E.InteractiveMessage_Header{
+							HasMediaAttachment: proto.Bool(true),
+							Media: &waE2E.InteractiveMessage_Header_ImageMessage{
+								ImageMessage: &waE2E.ImageMessage{
+									URL:            proto.String(uploaded.URL),
+									DirectPath:     proto.String(uploaded.DirectPath),
+									MediaKey:       uploaded.MediaKey,
+									Mimetype:       proto.String("image/jpeg"),
+									FileEncSHA256:  uploaded.FileEncSHA256,
+									FileSHA256:     uploaded.FileSHA256,
+									FileLength:     proto.Uint64(uploaded.FileLength),
+									JPEGThumbnail:  jpegThumb,
+								},
+							},
+						}
+					}
+				}
+			}
+		}
 
 		msg = &waE2E.Message{
 			InteractiveMessage: interactiveMsg,
