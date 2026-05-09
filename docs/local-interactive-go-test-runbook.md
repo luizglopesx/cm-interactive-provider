@@ -104,6 +104,7 @@ pelo servidor da Meta), os endpoints rejeitam combinações inválidas com `400`
 - `reply` máx 3, e não pode misturar com outros tipos
 - CTA (`url`/`call`/`copy`) máx 2 — paridade com Evolution 2.3.7
 - `pix` máx 1 e não pode misturar com outros tipos
+- `thumbnailUrl` (opcional): URL de imagem pública exibida como header acima do título
 
 `POST /send/carousel`:
 - ≥ 1 card e ≤ 10 cards
