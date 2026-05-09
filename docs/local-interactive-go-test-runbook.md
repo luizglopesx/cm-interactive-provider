@@ -21,7 +21,48 @@ The current upstream code already includes:
 API endpoints are gated by the official license middleware until `/license/status`
 returns `active`.
 
-## Test Results — 2026-05-08 (sessão tarde)
+## Dev setup (primeira vez)
+
+```bash
+git clone https://github.com/luizglopesx/cm-interactive-provider
+cd cm-interactive-provider/evolution-go-interactive
+git checkout interactive-go-test
+
+# Build
+docker build -t evolution-go-interactive:local .
+
+# Run
+docker rm -f evolution-go-interactive-test 2>/dev/null
+docker run -d \
+  --name evolution-go-interactive-test \
+  --add-host=host.docker.internal:host-gateway \
+  -p 8093:8093 \
+  --env-file .env \
+  evolution-go-interactive:local
+
+# Ativar licenca
+curl -i -sS "http://localhost:8093/license/register?redirect_uri=http://localhost:8093/manager/license/callback"
+
+# Criar instancia
+curl -X POST "http://localhost:8093/instance/create" \
+  -H "Content-Type: application/json" \
+  -H "apikey: BQYHJGJHJ123" \
+  -d '{"name":"interactive-go-test","token":"interactive-go-token-123"}'
+
+# Conectar e escanear QR
+curl -X POST "http://localhost:8093/instance/connect" \
+  -H "Content-Type: application/json" \
+  -H "apikey: interactive-go-token-123"
+
+curl "http://localhost:8093/instance/qr" \
+  -H "apikey: interactive-go-token-123"
+
+# Verificar conexao
+curl "http://localhost:8093/instance/status" \
+  -H "apikey: interactive-go-token-123"
+```
+
+## Test Results — 2026-05-09 (sessão manhã)
 
 ### Environment
 - License activated: ✅ `active`
@@ -30,146 +71,132 @@ returns `active`.
 
 ### Results
 
-| Endpoint | API response | Delivered (mobile)? | Notes |
-|---|---|---|---|
-| `POST /send/text` | ✅ success | ✅ YES | Texto simples |
-| `POST /send/button` (reply) | ✅ success | ✅ YES | Após injeção do `<biz>` node |
-| `POST /send/button` (copy/PIX) | ✅ success | ✅ YES | Após injeção do `<biz>` node |
-| `POST /send/list` | ✅ success | ✅ YES | Após correção do biz node type (`product_list`) |
-| `POST /send/carousel` | ✅ success | ✅ YES | Após alinhamento estrutural com 2.3.7 |
+| Endpoint | API response | Mobile | Desktop WA | Notes |
+|---|---|---|---|---|
+| `POST /send/text` | ✅ | ✅ | ✅ | Texto simples |
+| `POST /send/button` (reply) | ✅ | ✅ | ✅ | Após injeção do `<biz>` node |
+| `POST /send/button` (copy/PIX) | ✅ | ✅ | ✅ | |
+| `POST /send/button` (thumbnailUrl) | ✅ | ✅ | ✅ | Header com imagem — novo |
+| `POST /send/list` | ✅ | ✅ | ✅ (testar) | Após correção do biz node type |
+| `POST /send/carousel` | ✅ | ✅ | ❌ | Desktop WA não renderiza carrossel |
 
-> WhatsApp Desktop/Web NÃO renderiza `CarouselMessage` por design do cliente. Carrossel
-> é mobile-only (Android/iOS); botões e lista chegam no Desktop normalmente. Mesmo
-> comportamento do Evolution 2.3.7 (Baileys).
+## Fixes aplicados (2026-05-08 e 2026-05-09)
 
-### Root cause + fixes aplicados
-
-**1. Botões / Lista / Carrossel não chegavam (silenciados pelo servidor WhatsApp)**
+### 1. Biz node para InteractiveMessage (botões/carrossel)
 
 O WhatsApp filtra `NativeFlowMessage` quando o stanza não tem o nó `<biz>` que sinaliza
-contexto Business legítimo. ACK é retornado, mas a mensagem nunca chega no destinatário.
+contexto Business legítimo.
 
 **Fix:** injetar `AdditionalNodes` no `whatsmeow.SendRequestExtra` em
-`pkg/sendMessage/service/send_service.go`:
+`pkg/sendMessage/service/send_service.go` (linha ~1853: `SendButton`, linha ~2372: `SendMessage`).
 
-- `SendButton` (linha ~1844): injeta `<biz><interactive type="native_flow" v="1"><native_flow v="9" name="mixed"/></interactive></biz>`
-- `SendMessage` (linha ~2358, switch por `messageType`):
-  - `"InteractiveMessage"` → mesmo nó `biz/interactive`
-  - `"ListMessage"` → `<biz><list type="product_list" v="2"/></biz>`
+- `InteractiveMessage` → `<biz><interactive type="native_flow" v="1"><native_flow v="9" name="mixed"/></interactive></biz>`
+- `ListMessage` → whatsmeow já injeta automaticamente (ver item 3)
 
-Equivalente Node.js no Evolution 2.3.7:
-`src/api/integrations/channel/whatsapp/helpers/interactiveMessage.helper.ts` →
-`buildInteractiveBizNode()` / `buildListBizNode()`.
+Equivalente Node.js: `buildInteractiveBizNode()` em `interactiveMessage.helper.ts`.
 
-**2. Carrossel ainda silenciado mesmo com `<biz>`**
-
-Mesmo após (1), o carrossel retornava success mas não chegava. Diferenças estruturais
-encontradas comparando com o `carouselMessage` que funciona no 2.3.7:
+### 2. Estrutura do carrossel alinhada com 2.3.7
 
 | Campo | Antes (Go) | Depois (Go = 2.3.7) |
 |---|---|---|
 | `msg.MessageContextInfo` | `{ DeviceListMetadata: {} }` | omitido |
-| `interactiveMessage.Footer` (top-level) | preenchido com `data.Footer` | omitido |
-| `interactiveMessage.ContextInfo` (top-level) | sempre `{}` | só setado se há `quoted` |
-| `cards[].Header` | sempre criado com `Title`/`Subtitle`/`HasMediaAttachment:false` | só criado se há `imageUrl`/`videoUrl`, e descartado se upload falhar |
+| `interactiveMessage.Footer` (top-level) | preenchido | omitido |
+| `interactiveMessage.ContextInfo` (top-level) | sempre `{}` | só se há `quoted` |
+| `cards[].Header` | sempre criado | só se há `imageUrl`/`videoUrl` |
 
-Aplicado em `SendCarousel` (`pkg/sendMessage/service/send_service.go:2545+`).
+### 3. ListMessage biz node type (`product_list`)
 
-### Lista — investigação e correção
+O endpoint `/send/list` sempre esteve implementado. O erro `405` vinha do servidor
+WhatsApp porque o atributo `type` do nó `<biz>` estava errado.
 
-O endpoint `/send/list` sempre esteve registrado e implementado no Go. O erro `405` vinha
-do servidor WhatsApp, não da API.
+**Causa:** `whatsmeow-lib/send.go:getButtonAttributes()` derivava o tipo do enum protobuf
+(`SINGLE_SELECT` → `"single_select"`), mas o WhatsApp espera `"product_list"`.
 
-**Causa raiz:** o whatsmeow injeta automaticamente o nó `<biz>` para `ListMessage` via
-`getButtonTypeFromMessage`/`getButtonAttributes` em `send.go:1137-1145`. O atributo `type`
-era derivado do enum protobuf (`SINGLE_SELECT` → `"single_select"`), mas o protocolo do
-WhatsApp espera `"product_list"` nesse atributo.
+**Fix:** `whatsmeow-lib/send.go:1014` — alterado para `"product_list"` hard-coded.
 
-O Evolution 2.3.7 (Baileys) faz isso corretamente no `buildListBizNode()`:
+O Evolution 2.3.7 já fazia isso certo no `buildListBizNode()`:
 ```typescript
 { tag: 'list', attrs: { type: 'product_list', v: '2' } }
 ```
 
-**Correção:** [`whatsmeow-lib/send.go:1014`](../whatsmeow-lib/send.go#L1014) — alterado de
-`strings.ToLower(ListMessage_ListType_name[...])` para o valor hard-coded `"product_list"`,
-igual ao 2.3.7.
+**Commit:** `c074d14`
+
+### 4. thumbnailUrl no botão
+
+Adicionado campo `thumbnailUrl` no `ButtonStruct`. Quando informado, o servidor:
+1. Baixa a imagem da URL
+2. Faz upload para os servidores do WhatsApp (`client.Upload`)
+3. Gera thumbnail JPEG de 72px para compatibilidade com iOS
+4. Injeta no header do InteractiveMessage com `hasMediaAttachment: true`
+
+**Arquivo:** `pkg/sendMessage/service/send_service.go`
+- `ButtonStruct.ThumbnailUrl` (struct)
+- `SendButton` (lógica de download/upload/header)
+
+**Commit:** `41258ab`
 
 ## Validações de payload (paridade com Evolution 2.3.7)
-
-Para evitar `200 success` mentiroso (mensagem aceita pela API mas filtrada silenciosamente
-pelo servidor da Meta), os endpoints rejeitam combinações inválidas com `400` antes do envio:
 
 `POST /send/button`:
 - ≥ 1 botão obrigatório
 - `reply` máx 3, e não pode misturar com outros tipos
-- CTA (`url`/`call`/`copy`) máx 2 — paridade com Evolution 2.3.7
+- CTA (`url`/`call`/`copy`) máx 2
 - `pix` máx 1 e não pode misturar com outros tipos
-- `thumbnailUrl` (opcional): URL de imagem pública exibida como header acima do título
+- `thumbnailUrl` (opcional): URL de imagem pública exibida como header
 
 `POST /send/carousel`:
 - ≥ 1 card e ≤ 10 cards
 - Cada card: ≥ 1 botão e ≤ 3 botões
-- `pix` não é suportado dentro de cards de carrossel (renderização não funciona)
+- `pix` não é suportado dentro de cards de carrossel
 
-### Sender → recipient delivery matrix
+## Paridade Evolution Go ↔ 2.3.7
 
-| Sender | Cliente do recipient | Botão | Lista | Carrossel |
-|---|---|---|---|---|
-| Senhor Colchão (Business App) | Mobile (Android/iOS) | ✅ | ✅ | ✅ |
-| Senhor Colchão (Business App) | WhatsApp Desktop/Web | (botão chega) | n/a | ❌ (limitação do cliente) |
+| 2.3.7 | Evolution Go | Status |
+|---|---|---|
+| `sendText` | `/send/text` | ✅ |
+| `sendMedia` | `/send/media` | ✅ |
+| `sendSticker` | `/send/sticker` | ✅ |
+| `sendLocation` | `/send/location` | ✅ |
+| `sendContact` | `/send/contact` | ✅ |
+| `sendPoll` | `/send/poll` | ✅ |
+| `sendButtons` | `/send/button` | ✅ |
+| `sendButtons` (thumbnailUrl) | `/send/button` (thumbnailUrl) | ✅ |
+| `sendList` | `/send/list` | ✅ |
+| `sendCarousel` | `/send/carousel` | ✅ |
+| `sendStatus` | `/send/status/text` + `/send/status/media` | ✅ |
+| `sendReaction` | `/message/react` | ✅ |
+| `sendTemplate` | — | ❌ |
+| `sendPtv` | — | ❌ |
+| `sendWhatsAppAudio` | — | ❌ |
 
-## Health and license
+## Sender → recipient delivery matrix
 
-```bash
-curl -i -sS http://localhost:8093/server/ok
-curl -i -sS http://localhost:8093/license/status
-curl -i -sS "http://localhost:8093/license/register?redirect_uri=http://localhost:8093/manager/license/callback"
-```
+| Sender | Cliente do recipient | Botão | Botão c/ img | Lista | Carrossel |
+|---|---|---|---|---|---|
+| Senhor Colchão (Business App) | Mobile (Android/iOS) | ✅ | ✅ | ✅ | ✅ |
+| Senhor Colchão (Business App) | WhatsApp Desktop/Mac | ✅ | ✅ | ✅ (testar) | ❌ |
 
-Manager:
+## Test commands
 
-```text
-http://localhost:8093/manager/login
-```
-
-Use:
-
-```text
-API URL: http://localhost:8093
-GLOBAL_API_KEY: BQYHJGJHJ123
-```
-
-## Create and connect instance
-
-After license activation:
-
-```bash
-curl -X POST "http://localhost:8093/instance/create" \
-  -H "Content-Type: application/json" \
-  -H "apikey: BQYHJGJHJ123" \
-  -d '{"name":"interactive-go-test","token":"interactive-go-token-123"}'
-
-curl -X POST "http://localhost:8093/instance/connect" \
-  -H "Content-Type: application/json" \
-  -H "apikey: interactive-go-token-123"
-
-curl "http://localhost:8093/instance/qr" \
-  -H "apikey: interactive-go-token-123"
-
-curl "http://localhost:8093/instance/status" \
-  -H "apikey: interactive-go-token-123"
-```
-
-## Test buttons
+### Botão reply
 
 ```bash
 curl -X POST "http://localhost:8093/send/button" \
   -H "Content-Type: application/json" \
   -H "apikey: interactive-go-token-123" \
-  -d '{"number":"5517981189332","title":"Escolha uma opcao","description":"Teste de botoes no Evolution Go","footer":"Evolution Go","buttons":[{"type":"reply","displayText":"Comprar","id":"buy"},{"type":"reply","displayText":"Atendente","id":"agent"}]}'
+  -d '{"number":"5517981189332","title":"Escolha uma opcao","description":"Teste de botoes","footer":"Evolution Go","buttons":[{"type":"reply","displayText":"Comprar","id":"buy"},{"type":"reply","displayText":"Atendente","id":"agent"}]}'
 ```
 
-## Test copy button for PIX
+### Botão com imagem (thumbnailUrl)
+
+```bash
+curl -X POST "http://localhost:8093/send/button" \
+  -H "Content-Type: application/json" \
+  -H "apikey: interactive-go-token-123" \
+  -d '{"number":"5517981189332","title":"Oferta Especial","description":"Confira nossos planos!","footer":"Evolution GO","thumbnailUrl":"https://picsum.photos/seed/btnheader/400/300","buttons":[{"type":"reply","displayText":"Quero saber mais","id":"cta_saber_mais"},{"type":"reply","displayText":"Falar com consultor","id":"cta_consultor"}]}'
+```
+
+### Botão PIX (copy)
 
 ```bash
 curl -X POST "http://localhost:8093/send/button" \
@@ -178,24 +205,20 @@ curl -X POST "http://localhost:8093/send/button" \
   -d '{"number":"5517981189332","title":"Pagamento via PIX","description":"Clique para copiar a chave PIX","footer":"Senhor Colchao","buttons":[{"type":"copy","displayText":"Copiar chave PIX","copyCode":"279949240007"}]}'
 ```
 
-## Test list
+### Lista
 
 ```bash
 curl -X POST "http://localhost:8093/send/list" \
   -H "Content-Type: application/json" \
   -H "apikey: interactive-go-token-123" \
-  -d '{"number":"5517981189332","title":"Menu de atendimento","description":"Escolha uma opcao abaixo","footerText":"Senhor Colchao","buttonText":"Ver opcoes","sections":[{"title":"Vendas","rows":[{"title":"Comprar colchao","description":"Ver modelos disponiveis","rowId":"sales_mattress"},{"title":"Consultar pedido","description":"Acompanhar status","rowId":"sales_order_status"}]},{"title":"Suporte","rows":[{"title":"Falar com atendente","description":"Abrir atendimento humano","rowId":"support_agent"}]}]}'
+  -d '{"number":"5517981189332","title":"Menu de atendimento","description":"Escolha uma opcao","footerText":"Senhor Colchao","buttonText":"Ver opcoes","sections":[{"title":"Vendas","rows":[{"title":"Comprar colchao","description":"Ver modelos","rowId":"sales_mattress"},{"title":"Consultar pedido","description":"Status do pedido","rowId":"sales_order"}]},{"title":"Suporte","rows":[{"title":"Falar com atendente","description":"Atendimento humano","rowId":"support_agent"}]}]}'
 ```
 
-## Test carousel
-
-> Atenção: cada card usa `body: { "text": "..." }` (objeto), enquanto o `body` no
-> nível raiz e `footer` são strings simples.
+### Carrossel
 
 ```bash
 curl -X POST "http://localhost:8093/send/carousel" \
   -H "Content-Type: application/json" \
   -H "apikey: interactive-go-token-123" \
-  -d '{"number":"5517981189332","body":"Modelos em destaque","footer":"Senhor Colchao","cards":[{"header":{"title":"Colchao Premium","imageUrl":"https://picsum.photos/600/400?random=11"},"body":{"text":"Conforto alto e entrega rapida."},"footer":"A partir de R$ 999","buttons":[{"type":"REPLY","displayText":"Quero esse","id":"premium"},{"type":"COPY","displayText":"Copiar PIX","copyCode":"279949240007"}]},{"header":{"title":"Colchao Luxo","imageUrl":"https://picsum.photos/600/400?random=12"},"body":{"text":"Modelo reforcado para casal."},"footer":"A partir de R$ 1299","buttons":[{"type":"REPLY","displayText":"Ver luxo","id":"luxo"},{"type":"URL","displayText":"Abrir site","id":"https://senhorcolchao.com"}]}]}'
+  -d '{"number":"5517981189332","body":"Modelos em destaque","footer":"Senhor Colchao","cards":[{"header":{"imageUrl":"https://picsum.photos/600/400?random=11"},"body":{"text":"Colchao Premium - conforto alto."},"footer":"A partir de R$ 999","buttons":[{"type":"REPLY","displayText":"Quero esse","id":"premium"}]},{"header":{"imageUrl":"https://picsum.photos/600/400?random=12"},"body":{"text":"Colchao Luxo - reforcado casal."},"footer":"A partir de R$ 1299","buttons":[{"type":"REPLY","displayText":"Ver luxo","id":"luxo"}]}]}'
 ```
-
