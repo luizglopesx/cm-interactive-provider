@@ -35,7 +35,7 @@ returns `active`.
 | `POST /send/text` | ✅ success | ✅ YES | Texto simples |
 | `POST /send/button` (reply) | ✅ success | ✅ YES | Após injeção do `<biz>` node |
 | `POST /send/button` (copy/PIX) | ✅ success | ✅ YES | Após injeção do `<biz>` node |
-| `POST /send/list` | ❌ `server returned error 405` | ❌ NO | WA server bloqueia ListMessage legacy (`not-allowed`) — feature descontinuada nessa conta |
+| `POST /send/list` | ✅ success | ✅ YES | Após correção do biz node type (`product_list`) |
 | `POST /send/carousel` | ✅ success | ✅ YES | Após alinhamento estrutural com 2.3.7 |
 
 > WhatsApp Desktop/Web NÃO renderiza `CarouselMessage` por design do cliente. Carrossel
@@ -75,32 +75,24 @@ encontradas comparando com o `carouselMessage` que funciona no 2.3.7:
 
 Aplicado em `SendCarousel` (`pkg/sendMessage/service/send_service.go:2545+`).
 
-### Lista — investigação final
+### Lista — investigação e correção
 
-Trajetória de erros e o que foi descoberto:
+O endpoint `/send/list` sempre esteve registrado e implementado no Go. O erro `405` vinha
+do servidor WhatsApp, não da API.
 
-1. **Antes da correção:** `405` (bloqueado pelo servidor).
-2. **Após injetar `<biz><list type="product_list" v="2"/></biz>` via AdditionalNodes:** `479`
-   (`smax-invalid` — stanza inválida). Causa: o whatsmeow já injeta automaticamente
-   `<biz><list v="2" type="single_select"/></biz>` em
-   [`whatsmeow-lib/send.go:1137-1145`](../whatsmeow-lib/send.go#L1137) via
-   `getButtonTypeFromMessage`/`getButtonAttributes`. O nosso AdditionalNode duplica o `<biz>`,
-   o que o servidor rejeita.
-3. **Após remover o AdditionalNode para ListMessage** (mantendo só o automático): de volta ao
-   `405 not-allowed` — referência em
-   [`whatsmeow-lib/errors.go:187`](../whatsmeow-lib/errors.go#L187):
-   `ErrIQNotAllowed = &IQError{Code: 405, Text: "not-allowed"}`.
+**Causa raiz:** o whatsmeow injeta automaticamente o nó `<biz>` para `ListMessage` via
+`getButtonTypeFromMessage`/`getButtonAttributes` em `send.go:1137-1145`. O atributo `type`
+era derivado do enum protobuf (`SINGLE_SELECT` → `"single_select"`), mas o protocolo do
+WhatsApp espera `"product_list"` nesse atributo.
 
-**Conclusão:** o `405` é um bloqueio real do servidor da Meta — o formato `ListMessage` legacy
-está sendo descontinuado em favor de `NativeFlowMessage` (botões/carrossel). Contas pessoais
-e WhatsApp Business App não conseguem mais enviá-lo. Mesmo bloqueio afeta o Evolution 2.3.7
-(Baileys) na mesma conta.
+O Evolution 2.3.7 (Baileys) faz isso corretamente no `buildListBizNode()`:
+```typescript
+{ tag: 'list', attrs: { type: 'product_list', v: '2' } }
+```
 
-**Workarounds:**
-- Para menus pequenos (até 3 opções): usar `/send/button` com botões REPLY.
-- Para menus maiores (até 10 cards swipeable, mobile-only): usar `/send/carousel`.
-- Para listas verdadeiras: precisaria de conta na WhatsApp Business Platform (Cloud API),
-  que não passa por essa restrição.
+**Correção:** [`whatsmeow-lib/send.go:1014`](../whatsmeow-lib/send.go#L1014) — alterado de
+`strings.ToLower(ListMessage_ListType_name[...])` para o valor hard-coded `"product_list"`,
+igual ao 2.3.7.
 
 ## Validações de payload (paridade com Evolution 2.3.7)
 
@@ -122,7 +114,7 @@ pelo servidor da Meta), os endpoints rejeitam combinações inválidas com `400`
 
 | Sender | Cliente do recipient | Botão | Lista | Carrossel |
 |---|---|---|---|---|
-| Senhor Colchão (Business App) | Mobile (Android/iOS) | ✅ | ❌ (479) | ✅ |
+| Senhor Colchão (Business App) | Mobile (Android/iOS) | ✅ | ✅ | ✅ |
 | Senhor Colchão (Business App) | WhatsApp Desktop/Web | (botão chega) | n/a | ❌ (limitação do cliente) |
 
 ## Health and license
