@@ -176,49 +176,145 @@ Adicionado campo `thumbnailUrl` no `ButtonStruct`. Quando informado, o servidor:
 | Senhor Colchão (Business App) | Mobile (Android/iOS) | ✅ | ✅ | ✅ | ✅ |
 | Senhor Colchão (Business App) | WhatsApp Desktop/Mac | ✅ | ✅ | ✅ (testar) | ❌ |
 
-## Test commands
+## Payloads validados em produção (https://go.senhorcolchao.com)
+
+Todos testados e confirmados como recebidos no número `5517981189332`.
+
+---
 
 ### Botão reply
 
-```bash
-curl -X POST "http://localhost:8093/send/button" \
-  -H "Content-Type: application/json" \
-  -H "apikey: interactive-go-token-123" \
-  -d '{"number":"5517981189332","title":"Escolha uma opcao","description":"Teste de botoes","footer":"Evolution Go","buttons":[{"type":"reply","displayText":"Comprar","id":"buy"},{"type":"reply","displayText":"Atendente","id":"agent"}]}'
+```json
+{
+  "number": "5517981189332",
+  "title": "Atendimento",
+  "description": "Como podemos ajudar voce hoje?",
+  "footer": "Senhor Colchao",
+  "buttons": [
+    {"type": "reply", "displayText": "Suporte Tecnico", "id": "suporte"},
+    {"type": "reply", "displayText": "Financeiro", "id": "financeiro"},
+    {"type": "reply", "displayText": "Vendas", "id": "vendas"}
+  ]
+}
 ```
+
+---
 
 ### Botão com imagem (thumbnailUrl)
 
-```bash
-curl -X POST "http://localhost:8093/send/button" \
-  -H "Content-Type: application/json" \
-  -H "apikey: interactive-go-token-123" \
-  -d '{"number":"5517981189332","title":"Oferta Especial","description":"Confira nossos planos!","footer":"Evolution GO","thumbnailUrl":"https://picsum.photos/seed/btnheader/400/300","buttons":[{"type":"reply","displayText":"Quero saber mais","id":"cta_saber_mais"},{"type":"reply","displayText":"Falar com consultor","id":"cta_consultor"}]}'
+```json
+{
+  "number": "5517981189332",
+  "title": "Oferta Especial",
+  "description": "Confira nossos planos!",
+  "footer": "Senhor Colchao",
+  "thumbnailUrl": "https://picsum.photos/seed/btnheader/400/300",
+  "buttons": [
+    {"type": "reply", "displayText": "Quero saber mais", "id": "cta_saber_mais"},
+    {"type": "reply", "displayText": "Falar com consultor", "id": "cta_consultor"}
+  ]
+}
 ```
 
-### Botão PIX (copy)
+---
 
-```bash
-curl -X POST "http://localhost:8093/send/button" \
-  -H "Content-Type: application/json" \
-  -H "apikey: interactive-go-token-123" \
-  -d '{"number":"5517981189332","title":"Pagamento via PIX","description":"Clique para copiar a chave PIX","footer":"Senhor Colchao","buttons":[{"type":"copy","displayText":"Copiar chave PIX","copyCode":"279949240007"}]}'
+### PIX via botão copy (recomendado)
+
+> O tipo `pix` nativo não renderiza sem WhatsApp Pay ativo. Use `copy` com a chave PIX.
+
+```json
+{
+  "number": "5517981189332",
+  "title": "Pagamento via PIX",
+  "description": "Clique no botao abaixo para copiar a chave PIX e realize o pagamento no seu banco.",
+  "footer": "Senhor Colchao",
+  "buttons": [
+    {
+      "type": "copy",
+      "displayText": "Copiar chave PIX",
+      "copyCode": "27994924000107"
+    }
+  ]
+}
 ```
+
+---
 
 ### Lista
 
-```bash
-curl -X POST "http://localhost:8093/send/list" \
-  -H "Content-Type: application/json" \
-  -H "apikey: interactive-go-token-123" \
-  -d '{"number":"5517981189332","title":"Menu de atendimento","description":"Escolha uma opcao","footerText":"Senhor Colchao","buttonText":"Ver opcoes","sections":[{"title":"Vendas","rows":[{"title":"Comprar colchao","description":"Ver modelos","rowId":"sales_mattress"},{"title":"Consultar pedido","description":"Status do pedido","rowId":"sales_order"}]},{"title":"Suporte","rows":[{"title":"Falar com atendente","description":"Atendimento humano","rowId":"support_agent"}]}]}'
+```json
+{
+  "number": "5517981189332",
+  "title": "Menu de atendimento",
+  "description": "Escolha uma opcao",
+  "footerText": "Senhor Colchao",
+  "buttonText": "Ver opcoes",
+  "sections": [
+    {
+      "title": "Vendas",
+      "rows": [
+        {"title": "Comprar colchao", "description": "Ver modelos", "rowId": "sales_mattress"},
+        {"title": "Consultar pedido", "description": "Status do pedido", "rowId": "sales_order"}
+      ]
+    },
+    {
+      "title": "Suporte",
+      "rows": [
+        {"title": "Falar com atendente", "description": "Atendimento humano", "rowId": "support_agent"}
+      ]
+    }
+  ]
+}
 ```
+
+---
 
 ### Carrossel
 
-```bash
-curl -X POST "http://localhost:8093/send/carousel" \
-  -H "Content-Type: application/json" \
-  -H "apikey: interactive-go-token-123" \
-  -d '{"number":"5517981189332","body":"Modelos em destaque","footer":"Senhor Colchao","cards":[{"header":{"imageUrl":"https://picsum.photos/600/400?random=11"},"body":{"text":"Colchao Premium - conforto alto."},"footer":"A partir de R$ 999","buttons":[{"type":"REPLY","displayText":"Quero esse","id":"premium"}]},{"header":{"imageUrl":"https://picsum.photos/600/400?random=12"},"body":{"text":"Colchao Luxo - reforcado casal."},"footer":"A partir de R$ 1299","buttons":[{"type":"REPLY","displayText":"Ver luxo","id":"luxo"}]}]}'
+> **Atenção:** o campo `body` dentro de cada card deve ser um objeto `{"text": "..."}`, não uma string.
+
+```json
+{
+  "number": "5517981189332",
+  "body": "Confira nossos colchoes em destaque!",
+  "footer": "Senhor Colchao",
+  "cards": [
+    {
+      "header": {
+        "title": "Colchao Premium",
+        "imageUrl": "https://picsum.photos/seed/colchao1/600/400"
+      },
+      "body": {"text": "Conforto alto e durabilidade. Ideal para quem busca qualidade no sono."},
+      "footer": "A partir de R$ 999",
+      "buttons": [
+        {"type": "REPLY", "displayText": "Quero esse", "id": "premium"},
+        {"type": "REPLY", "displayText": "Ver detalhes", "id": "premium_detalhes"}
+      ]
+    },
+    {
+      "header": {
+        "title": "Colchao Luxo Casal",
+        "imageUrl": "https://picsum.photos/seed/colchao2/600/400"
+      },
+      "body": {"text": "Reforcado para casal, molas ensacadas e espuma viscoelastica."},
+      "footer": "A partir de R$ 1.299",
+      "buttons": [
+        {"type": "REPLY", "displayText": "Quero esse", "id": "luxo"},
+        {"type": "REPLY", "displayText": "Ver detalhes", "id": "luxo_detalhes"}
+      ]
+    },
+    {
+      "header": {
+        "title": "Colchao Infantil",
+        "imageUrl": "https://picsum.photos/seed/colchao3/600/400"
+      },
+      "body": {"text": "Desenvolvido para criancas, suporte ortopedico e capa lavavel."},
+      "footer": "A partir de R$ 499",
+      "buttons": [
+        {"type": "REPLY", "displayText": "Quero esse", "id": "infantil"},
+        {"type": "REPLY", "displayText": "Ver detalhes", "id": "infantil_detalhes"}
+      ]
+    }
+  ]
+}
 ```
