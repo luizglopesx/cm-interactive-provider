@@ -125,9 +125,34 @@ curl -X POST http://localhost:4000/send/button \
   }'
 ```
 
-### Exemplo 3: Botão PIX
+### Exemplo 3: Botão PIX (recomendado: tipo `copy`)
 
-Deve ser enviado **sozinho**, sem outros botões.
+> ⚠️ **Atenção**: O tipo `pix` nativo (`"type": "pix"`) só renderiza visualmente em contas com WhatsApp Pay ativo no Brasil. Para a maioria dos casos, use o tipo `copy` com a chave PIX — funciona em qualquer conta, testado e validado em produção.
+
+**Formato recomendado (`copy`):**
+
+```bash
+curl -X POST http://localhost:4000/send/button \
+  -H "Content-Type: application/json" \
+  -H "apikey: SUA-CHAVE-API" \
+  -d '{
+    "number": "5511999999999",
+    "title": "Pagamento via PIX",
+    "description": "Clique no botao abaixo para copiar a chave PIX e realize o pagamento no seu banco.",
+    "footer": "Nome da Empresa",
+    "buttons": [
+      {
+        "type": "copy",
+        "displayText": "Copiar chave PIX",
+        "copyCode": "12345678000199"
+      }
+    ]
+  }'
+```
+
+O cliente clica no botão e a chave PIX é copiada automaticamente para a área de transferência.
+
+**Formato nativo (`pix`) — requer WhatsApp Pay ativo:**
 
 ```bash
 curl -X POST http://localhost:4000/send/button \
@@ -719,6 +744,7 @@ A instância deve ter o evento `BUTTON_CLICK` ou `MESSAGE` habilitado na configu
 | Botões (url) | ✅ | ✅ | ✅ |
 | Botões (call) | ✅ | ✅ | ✅ |
 | Botões (copy) | ✅ | ✅ | ✅ |
-| Botões (pix) | ✅ | ✅ | ✅ |
+| Botões (pix nativo) | ⚠️ Requer WhatsApp Pay | ⚠️ Requer WhatsApp Pay | ⚠️ Requer WhatsApp Pay |
+| Botões (pix via copy) | ✅ | ✅ | ✅ |
 | Lista | ✅ | ✅ | ✅ |
 | Carrossel | ✅ | ✅ | ✅ |
