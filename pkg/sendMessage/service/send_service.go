@@ -1790,68 +1790,26 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 
 	for _, v := range data.Buttons {
 		var paramsJSON *string
+
 		var name *string
 
 		switch v.Type {
 		case "reply":
 			name = proto.String("quick_reply")
-			jsonBytes, _ := json.Marshal(map[string]string{"display_text": v.DisplayText, "id": v.Id})
-			paramsJSON = proto.String(string(jsonBytes))
+			paramsJSON = proto.String(`{"display_text":"` + v.DisplayText + `","id":"` + v.Id + `"}`)
 		case "copy":
 			name = proto.String("cta_copy")
-			copyCode := v.CopyCode
-			if copyCode == "" {
-				copyCode = v.Id
-			}
-			copyId := v.Id
-			if copyId == "" {
-				copyId = "copy_" + strconv.FormatInt(time.Now().UnixNano(), 10)
-			}
-			jsonBytes, _ := json.Marshal(map[string]string{"display_text": v.DisplayText, "id": copyId, "copy_code": copyCode})
-			paramsJSON = proto.String(string(jsonBytes))
+			paramsJSON = proto.String(`{"display_text":"` + v.DisplayText + `","copy_code":"` + v.CopyCode + `"}`)
 		case "url":
 			name = proto.String("cta_url")
-			jsonBytes, _ := json.Marshal(map[string]string{"display_text": v.DisplayText, "url": v.URL, "merchant_url": v.URL})
-			paramsJSON = proto.String(string(jsonBytes))
+			paramsJSON = proto.String(`{"display_text":"` + v.DisplayText + `","url":"` + v.URL + `","merchant_url":"` + v.URL + `"}`)
 		case "call":
 			name = proto.String("cta_call")
-			jsonBytes, _ := json.Marshal(map[string]string{"display_text": v.DisplayText, "phone_number": v.PhoneNumber})
-			paramsJSON = proto.String(string(jsonBytes))
+			paramsJSON = proto.String(`{"display_text":"` + v.DisplayText + `","phone_number":"` + v.PhoneNumber + `"}`)
 		case "pix":
 			randomId := utils.GenerateRandomString(11)
 			name = proto.String("payment_info")
-			paymentPayload := map[string]interface{}{
-				"currency":     v.Currency,
-				"total_amount": map[string]interface{}{"value": 0, "offset": 100},
-				"reference_id": randomId,
-				"type":         "physical-goods",
-				"order": map[string]interface{}{
-					"status":     "pending",
-					"subtotal":   map[string]interface{}{"value": 0, "offset": 100},
-					"order_type": "ORDER",
-					"items": []map[string]interface{}{
-						{
-							"name":        "",
-							"amount":      map[string]interface{}{"value": 0, "offset": 100},
-							"quantity":    0,
-							"sale_amount": map[string]interface{}{"value": 0, "offset": 100},
-						},
-					},
-				},
-				"payment_settings": []map[string]interface{}{
-					{
-						"type": "pix_static_code",
-						"pix_static_code": map[string]string{
-							"merchant_name": v.Name,
-							"key":           v.Key,
-							"key_type":      mapKeyType(v.KeyType),
-						},
-					},
-				},
-				"share_payment_status": false,
-			}
-			jsonBytes, _ := json.Marshal(paymentPayload)
-			paramsJSON = proto.String(string(jsonBytes))
+			paramsJSON = proto.String(`{"currency":"` + v.Currency + `","total_amount":{"value":0,"offset":100},"reference_id":"` + randomId + `","type":"physical-goods","order":{"status":"pending","subtotal":{"value":0,"offset":100},"order_type":"ORDER","items":[{"name":"","amount":{"value":0,"offset":100},"quantity":0,"sale_amount":{"value":0,"offset":100}}]},"payment_settings":[{"type":"pix_static_code","pix_static_code":{"merchant_name":"` + v.Name + `","key":"` + v.Key + `","key_type":"` + mapKeyType(v.KeyType) + `"}}],"share_payment_status":false}`)
 		}
 
 		buttons = append(buttons, &waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
@@ -1860,130 +1818,24 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 		})
 	}
 
+	messageId := client.GenerateMessageID()
 	templateId := strconv.FormatInt(time.Now().UnixNano()/1000000, 10)
 	messageParamsJSON := `{"from":"api","templateId":` + templateId + `}`
 
-	// MessageSecret (32 random bytes) — required for iOS to render interactive messages.
-	btnMsgSecret := make([]byte, 32)
-	_, _ = crypto_rand.Read(btnMsgSecret)
-
-	// thumbnailUrl is a legacy alias for imageUrl, kept for backwards compatibility.
-	headerImageUrl := data.ImageUrl
-	if headerImageUrl == "" {
-		headerImageUrl = data.ThumbnailUrl
-	}
-
 	var msg *waE2E.Message
-	var msgType string
 
-	if hasReply && !hasOtherTypes && !hasPix {
-		// Reply-only: native ButtonsMessage wrapped in DocumentWithCaptionMessage (Baileys PR #36).
-		var replyButtons []*waE2E.ButtonsMessage_Button
-		for _, v := range data.Buttons {
-			replyButtons = append(replyButtons, &waE2E.ButtonsMessage_Button{
-				ButtonID: proto.String(v.Id),
-				ButtonText: &waE2E.ButtonsMessage_Button_ButtonText{
-					DisplayText: proto.String(v.DisplayText),
-				},
-				Type: waE2E.ButtonsMessage_Button_RESPONSE.Enum(),
-			})
-		}
-
-		buttonsMsg := &waE2E.ButtonsMessage{
-			ContentText: proto.String(data.Description),
-			FooterText:  proto.String(data.Footer),
-			HeaderType:  waE2E.ButtonsMessage_EMPTY.Enum(),
-			Buttons:     replyButtons,
-		}
-
-		// Optional media header (image or video URL).
-		if headerImageUrl != "" {
-			if resp, err := http.Get(headerImageUrl); err == nil {
-				fileData, readErr := io.ReadAll(resp.Body)
-				resp.Body.Close()
-				if readErr == nil {
-					if uploaded, upErr := client.Upload(context.Background(), fileData, whatsmeow.MediaImage); upErr == nil {
-						buttonsMsg.HeaderType = waE2E.ButtonsMessage_IMAGE.Enum()
-						buttonsMsg.Header = &waE2E.ButtonsMessage_ImageMessage{
-							ImageMessage: &waE2E.ImageMessage{
-								URL:           proto.String(uploaded.URL),
-								DirectPath:    proto.String(uploaded.DirectPath),
-								MediaKey:      uploaded.MediaKey,
-								Mimetype:      proto.String("image/jpeg"),
-								FileEncSHA256: uploaded.FileEncSHA256,
-								FileSHA256:    uploaded.FileSHA256,
-								FileLength:    proto.Uint64(uint64(len(fileData))),
-							},
-						}
-					}
-				}
-			}
-		} else if data.VideoUrl != "" {
-			if resp, err := http.Get(data.VideoUrl); err == nil {
-				fileData, readErr := io.ReadAll(resp.Body)
-				resp.Body.Close()
-				if readErr == nil {
-					if uploaded, upErr := client.Upload(context.Background(), fileData, whatsmeow.MediaVideo); upErr == nil {
-						buttonsMsg.HeaderType = waE2E.ButtonsMessage_VIDEO.Enum()
-						buttonsMsg.Header = &waE2E.ButtonsMessage_VideoMessage{
-							VideoMessage: &waE2E.VideoMessage{
-								URL:           proto.String(uploaded.URL),
-								DirectPath:    proto.String(uploaded.DirectPath),
-								MediaKey:      uploaded.MediaKey,
-								Mimetype:      proto.String("video/mp4"),
-								FileEncSHA256: uploaded.FileEncSHA256,
-								FileSHA256:    uploaded.FileSHA256,
-								FileLength:    proto.Uint64(uint64(len(fileData))),
-							},
-						}
-					}
-				}
-			}
-		}
-
+	if hasPix {
 		msg = &waE2E.Message{
-			DocumentWithCaptionMessage: &waE2E.FutureProofMessage{
-				Message: &waE2E.Message{
-					ButtonsMessage: buttonsMsg,
-				},
-			},
-			MessageContextInfo: &waE2E.MessageContextInfo{
-				MessageSecret: btnMsgSecret,
-			},
-		}
-		msgType = "ButtonsMessage"
-	} else if hasPix {
-		// Pix: NativeFlowMessage wrapped in DocumentWithCaptionMessage.
-		paymentMsgParams := `{"native_flow_name":"order_details","version":1}`
-
-		var interactiveBody *waE2E.InteractiveMessage_Body
-		if data.Title != "" {
-			bodyText := data.Title
-			interactiveBody = &waE2E.InteractiveMessage_Body{Text: &bodyText}
-		}
-
-		msg = &waE2E.Message{
-			DocumentWithCaptionMessage: &waE2E.FutureProofMessage{
-				Message: &waE2E.Message{
-					InteractiveMessage: &waE2E.InteractiveMessage{
-						Body: interactiveBody,
-						InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
-							NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
-								Buttons:           buttons,
-								MessageParamsJSON: &paymentMsgParams,
-								MessageVersion:    proto.Int32(1),
-							},
-						},
+			InteractiveMessage: &waE2E.InteractiveMessage{
+				InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
+					NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+						Buttons:           buttons,
+						MessageParamsJSON: &messageParamsJSON,
 					},
 				},
 			},
-			MessageContextInfo: &waE2E.MessageContextInfo{
-				MessageSecret: btnMsgSecret,
-			},
 		}
-		msgType = "InteractiveMessage"
 	} else {
-		// Mixed CTA buttons (url/copy/call): NativeFlowMessage wrapped in DocumentWithCaptionMessage.
 		body := func() string {
 			t := "*" + data.Title + "*"
 			if data.Description != "" {
@@ -2003,6 +1855,7 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 					MessageVersion:    proto.Int32(1),
 				},
 			},
+			ContextInfo: &waE2E.ContextInfo{},
 		}
 
 		// Footer conditional - only add if not empty (iOS compatibility)
@@ -2013,13 +1866,42 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 		}
 
 		// Header com imagem quando imageUrl/thumbnailUrl é fornecido (paridade com Evolution 2.3.7)
+		headerImageUrl := data.ImageUrl
+		if headerImageUrl == "" {
+			headerImageUrl = data.ThumbnailUrl
+		}
 		if headerImageUrl != "" {
-			if thumbResp, thumbErr := http.Get(headerImageUrl); thumbErr == nil {
-				thumbData, readErr := io.ReadAll(thumbResp.Body)
-				thumbResp.Body.Close()
-				if readErr == nil {
-					if uploaded, uploadErr := client.Upload(context.Background(), thumbData, whatsmeow.MediaImage); uploadErr == nil {
-						jpegThumb := makeJPEGThumbnail(thumbData, 72)
+			thumbResp, thumbErr := http.Get(headerImageUrl)
+			if thumbErr == nil {
+				defer thumbResp.Body.Close()
+				thumbData, thumbErr := io.ReadAll(thumbResp.Body)
+				if thumbErr == nil {
+					uploaded, uploadErr := client.Upload(context.Background(), thumbData, whatsmeow.MediaImage)
+					if uploadErr == nil {
+						// Generate JPEG thumbnail for iOS compatibility
+						var jpegThumb []byte
+						img, _, decErr := image.Decode(bytes.NewReader(thumbData))
+						if decErr == nil {
+							bounds := img.Bounds()
+							thumbWidth := 72
+							thumbHeight := int(float64(bounds.Dy()) * float64(thumbWidth) / float64(bounds.Dx()))
+							if thumbHeight < 1 {
+								thumbHeight = 1
+							}
+							thumbImg := image.NewRGBA(image.Rect(0, 0, thumbWidth, thumbHeight))
+							for y := 0; y < thumbHeight; y++ {
+								for x := 0; x < thumbWidth; x++ {
+									srcX := x * bounds.Dx() / thumbWidth
+									srcY := y * bounds.Dy() / thumbHeight
+									thumbImg.Set(x, y, img.At(srcX+bounds.Min.X, srcY+bounds.Min.Y))
+								}
+							}
+							var thumbBuf bytes.Buffer
+							if jpeg.Encode(&thumbBuf, thumbImg, &jpeg.Options{Quality: 50}) == nil {
+								jpegThumb = thumbBuf.Bytes()
+							}
+						}
+
 						interactiveMsg.Header = &waE2E.InteractiveMessage_Header{
 							HasMediaAttachment: proto.Bool(true),
 							Media: &waE2E.InteractiveMessage_Header_ImageMessage{
@@ -2041,96 +1923,78 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 		}
 
 		msg = &waE2E.Message{
-			DocumentWithCaptionMessage: &waE2E.FutureProofMessage{
-				Message: &waE2E.Message{
-					InteractiveMessage: interactiveMsg,
-				},
-			},
-			MessageContextInfo: &waE2E.MessageContextInfo{
-				MessageSecret: btnMsgSecret,
-			},
-		}
-		msgType = "InteractiveMessage"
-	}
-
-	// Build biz/bot nodes injected directly in the XMPP stanza — required for mobile rendering.
-	// Reply-only buttons get <biz><buttons/></biz>; CTA/Pix get <biz><interactive type="native_flow" v="1"><native_flow name="X"/></interactive></biz>.
-	// The <bot biz_bot="1"/> node is required for 1:1 chats (skipped on groups).
-	var bizInteractiveContent waBinary.Node
-	if hasReply && !hasOtherTypes && !hasPix {
-		bizInteractiveContent = waBinary.Node{
-			Tag: "interactive",
-			Attrs: waBinary.Attrs{
-				"type": "native_flow",
-				"v":    "1",
-			},
-			Content: []waBinary.Node{{
-				Tag: "native_flow",
-				Attrs: waBinary.Attrs{
-					"name": "quick_reply",
-				},
-			}},
-		}
-	} else if hasPix {
-		bizInteractiveContent = waBinary.Node{
-			Tag: "interactive",
-			Attrs: waBinary.Attrs{
-				"type": "native_flow",
-				"v":    "1",
-			},
-			Content: []waBinary.Node{{
-				Tag: "native_flow",
-				Attrs: waBinary.Attrs{
-					"name": "payment_info",
-				},
-			}},
-		}
-	} else {
-		// Mixed CTA buttons (url/copy/call) — name="mixed" is the WhatsApp convention.
-		bizInteractiveContent = waBinary.Node{
-			Tag: "interactive",
-			Attrs: waBinary.Attrs{
-				"type": "native_flow",
-				"v":    "1",
-			},
-			Content: []waBinary.Node{{
-				Tag: "native_flow",
-				Attrs: waBinary.Attrs{
-					"name": "mixed",
-				},
-			}},
+			InteractiveMessage: interactiveMsg,
 		}
 	}
 
-	bizNodes := []waBinary.Node{
-		{
-			Tag:     "biz",
-			Content: []waBinary.Node{bizInteractiveContent},
-		},
-	}
-	if !strings.Contains(data.Number, "@g.us") {
-		bizNodes = append(bizNodes, waBinary.Node{
-			Tag:   "bot",
-			Attrs: waBinary.Attrs{"biz_bot": "1"},
-		})
-	}
-
-	// Route through centralized SendMessage for ContextInfo, webhooks, quotes, mentions.
-	message, err := s.SendMessage(instance, msg, msgType, &SendDataStruct{
-		Number:          data.Number,
-		Delay:           data.Delay,
-		MentionAll:      data.MentionAll,
-		MentionedJID:    data.MentionedJID,
-		FormatJid:       data.FormatJid,
-		Quoted:          data.Quoted,
-		AdditionalNodes: &bizNodes,
-	})
+	recipient, err := s.validateAndCheckUserExists(data.Number, data.FormatJid, &data.Quoted.MessageID, &data.Quoted.MessageID, instance)
 	if err != nil {
-		s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Error sending button message: %v", instance.Id, err)
+		s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Error validating message fields or user check: %v", instance.Id, err)
 		return nil, err
 	}
 
-	return message, nil
+	if data.Delay > 0 {
+		err := client.SendChatPresence(context.Background(), recipient, types.ChatPresence("composing"), types.ChatPresenceMedia(""))
+		if err != nil {
+			return nil, err
+		}
+
+		time.Sleep(time.Duration(data.Delay) * time.Millisecond)
+
+		err = client.SendChatPresence(context.Background(), recipient, types.ChatPresence("paused"), types.ChatPresenceMedia(""))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	bizNode := waBinary.Node{
+		Tag:   "biz",
+		Attrs: waBinary.Attrs{},
+		Content: []waBinary.Node{
+			{
+				Tag:   "interactive",
+				Attrs: waBinary.Attrs{"type": "native_flow", "v": "1"},
+				Content: []waBinary.Node{
+					{Tag: "native_flow", Attrs: waBinary.Attrs{"v": "9", "name": "mixed"}},
+				},
+			},
+		},
+	}
+	nodes := []waBinary.Node{bizNode}
+	sendExtra := whatsmeow.SendRequestExtra{
+		ID:              messageId,
+		AdditionalNodes: &nodes,
+	}
+
+	response, err := client.SendMessage(context.Background(), recipient, msg, sendExtra)
+	if err != nil {
+		return nil, err
+	}
+
+	messageInfo := types.MessageInfo{
+		MessageSource: types.MessageSource{
+			Chat:     recipient,
+			Sender:   *client.Store.ID,
+			IsFromMe: true,
+			IsGroup:  false,
+		},
+		ID:        messageId,
+		Timestamp: time.Now(),
+		ServerID:  response.ServerID,
+		Type:      "ButtonMessage",
+	}
+
+	messageSent := &MessageSendStruct{
+		Info:    messageInfo,
+		Message: msg,
+		MessageContextInfo: &waE2E.ContextInfo{
+			StanzaID:      proto.String(data.Quoted.MessageID),
+			Participant:   proto.String(data.Quoted.Participant),
+			QuotedMessage: &waE2E.Message{Conversation: proto.String("")},
+		},
+	}
+
+	return messageSent, nil
 }
 
 func stringPointer(s string) *string {
