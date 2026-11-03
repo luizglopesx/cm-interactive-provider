@@ -403,6 +403,13 @@ func (w whatsmeowService) StartClient(cd *ClientData) {
 		}
 	}
 
+	// DeviceProps.Version é só a versão do aparelho companheiro; a versão enviada no
+	// handshake é a global do whatsmeow. Sem SetWAVersion o login sai com a versão
+	// embutida na biblioteca e o WhatsApp responde 405 (client outdated).
+	if version.Major != 0 && version.Minor != 0 && version.Patch != 0 {
+		store.SetWAVersion(store.WAVersionContainer{uint32(version.Major), uint32(version.Minor), uint32(version.Patch)})
+	}
+
 	// 🔒 FIX: Sempre criar logger, mesmo que WaDebug esteja vazio
 	// Usar "INFO" como nível mínimo para garantir que logs importantes apareçam
 	minLevel := w.config.WaDebug
