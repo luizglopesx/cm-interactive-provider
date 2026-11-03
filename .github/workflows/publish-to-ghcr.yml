@@ -27,7 +27,7 @@ jobs:
         id: tags
         run: |
           IMAGE="ghcr.io/${{ github.repository }}"
-          TAGS="$IMAGE:latest"
+          TAGS="$IMAGE:latest,$IMAGE:${{ github.sha }}"
           if [ "${{ github.ref_name }}" = "main" ]; then
             TAGS="$TAGS,$IMAGE:${{ steps.version.outputs.version }}"
           else
@@ -61,7 +61,10 @@ jobs:
           WEBHOOK_URL: ${{ secrets.PORTAINER_WEBHOOK_URL }}
         run: |
           if [ -n "$WEBHOOK_URL" ]; then
-            curl -X POST "$WEBHOOK_URL"
+            # Tag do commit: sem ela o webhook só reinicia o serviço com a imagem que
+            # já está no nó, porque a tag da branch é reaproveitada.
+            case "$WEBHOOK_URL" in *\?*) SEP='&' ;; *) SEP='?' ;; esac
+            curl --fail-with-body -X POST "${WEBHOOK_URL}${SEP}tag=${{ github.sha }}"
             echo "Portainer redeploy triggered"
           else
             echo "No webhook configured — skipping Portainer update"
