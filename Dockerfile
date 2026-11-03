@@ -21,6 +21,8 @@ RUN CGO_ENABLED=1 go build -ldflags "-X main.version=${VERSION}" -o server ./cmd
 
 FROM alpine:3.19.1 AS final
 
+LABEL org.opencontainers.image.source="https://github.com/luizglopesx/cm-interactive-provider"
+
 # poppler-utils provides pdftoppm, used to rasterize PDF page 1 for /send/media document thumbnails
 RUN apk update && apk add --no-cache tzdata ffmpeg libjpeg-turbo libwebp poppler-utils
 
