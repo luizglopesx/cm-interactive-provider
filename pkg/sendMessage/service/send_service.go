@@ -1748,14 +1748,10 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 	hasReply := false
 	hasPix := false
 	hasOtherTypes := false
-	hasCopy := false
 	replyCount := 0
 	ctaCount := 0
 
 	for _, v := range data.Buttons {
-		if v.Type == "copy" {
-			hasCopy = true
-		}
 		switch v.Type {
 		case "reply":
 			hasReply = true
@@ -1802,9 +1798,8 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 			name = proto.String("quick_reply")
 			paramsJSON = proto.String(`{"display_text":"` + v.DisplayText + `","id":"` + v.Id + `"}`)
 		case "copy":
-			copyButton := buildCopyNativeFlowButton(v)
-			name = copyButton.Name
-			paramsJSON = copyButton.ButtonParamsJSON
+			name = proto.String("cta_copy")
+			paramsJSON = proto.String(`{"display_text":"` + v.DisplayText + `","copy_code":"` + v.CopyCode + `"}`)
 		case "url":
 			name = proto.String("cta_url")
 			paramsJSON = proto.String(`{"display_text":"` + v.DisplayText + `","url":"` + v.URL + `","merchant_url":"` + v.URL + `"}`)
@@ -1965,13 +1960,12 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 			},
 		},
 	}
-	nodes := []waBinary.Node{bizNode}
-	if hasCopy {
-		msg, nodes, err = prepareCopyMessage(msg, recipient.Server == types.GroupServer)
-		if err != nil {
+	if hasCopyButton(data.Buttons) {
+		if err := withCopyMessageSecret(msg); err != nil {
 			return nil, err
 		}
 	}
+	nodes := []waBinary.Node{bizNode}
 	sendExtra := whatsmeow.SendRequestExtra{
 		ID:              messageId,
 		AdditionalNodes: &nodes,
