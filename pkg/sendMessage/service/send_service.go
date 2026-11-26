@@ -3,7 +3,6 @@ package send_service
 import (
 	"bytes"
 	"context"
-	crypto_rand "crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -257,7 +256,7 @@ type Section struct {
 
 // ListStruct is the body for POST /send/list.
 //
-// Renders as a single-select menu (legacy ListMessage format — compatible with iOS, Android and WhatsApp Web).
+// Renders as a NativeFlow "single_select" menu inside an InteractiveMessage (same envelope as buttons).
 type ListStruct struct {
 	// Destination phone number.
 	Number string `json:"number" example:"5582988898565"`
@@ -2163,93 +2162,110 @@ func sectionsToString(data *ListStruct) (string, error) {
 	return string(jsonData), nil
 }
 
-func (s *sendService) SendList(data *ListStruct, instance *instance_model.Instance) (*MessageSendStruct, error) {
-	// Legacy ListMessage format - works on iOS, Android and Web
-	// Matching PAPI Node.js default (non-modern) path exactly
+// nativeFlowListRow, nativeFlowListSection and nativeFlowListParams mirror the
+// buttonParamsJSON of a NativeFlow "single_select" button.
+type nativeFlowListRow struct {
+	Header      string `json:"header"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	ID          string `json:"id"`
+}
 
+type nativeFlowListSection struct {
+	Title          string              `json:"title"`
+	HighlightLabel string              `json:"highlight_label"`
+	Rows           []nativeFlowListRow `json:"rows"`
+}
+
+type nativeFlowListParams struct {
+	Title    string                  `json:"title"`
+	Sections []nativeFlowListSection `json:"sections"`
+}
+
+// buildNativeFlowListMessage monta a lista como InteractiveMessage com um botão
+// NativeFlow "single_select" — o mesmo envelope dos botões, que chega no celular.
+// O ListMessage legado (com ou sem embrulho DocumentWithCaption) parou de
+// aparecer: em 2026-11-25 a lista saiu com sucesso e não apareceu no iPhone,
+// enquanto botões NativeFlow enviados no mesmo minuto chegaram e responderam.
+func buildNativeFlowListMessage(data *ListStruct, templateId string) (*waE2E.Message, error) {
 	buttonText := data.ButtonText
 	if buttonText == "" {
 		buttonText = "Ver Menu"
 	}
 
-	// Build sections in legacy ListMessage format
-	var sections []*waE2E.ListMessage_Section
-	for _, sec := range data.Sections {
-		sectionTitle := sec.Title
-		if sectionTitle == "" {
-			sectionTitle = " "
-		}
-		var rows []*waE2E.ListMessage_Row
-		for i, r := range sec.Rows {
-			rowTitle := r.Title
-			if rowTitle == "" {
-				rowTitle = " "
+	params := nativeFlowListParams{Title: buttonText}
+	for si, sec := range data.Sections {
+		section := nativeFlowListSection{Title: sec.Title}
+		for ri, r := range sec.Rows {
+			rowID := r.RowId
+			if rowID == "" {
+				rowID = fmt.Sprintf("row_%d_%d", si, ri)
 			}
-			rowId := r.RowId
-			if rowId == "" {
-				rowId = fmt.Sprintf("row_%d_%d", i, len(rows))
-			}
-			rows = append(rows, &waE2E.ListMessage_Row{
-				Title:       proto.String(rowTitle),
-				Description: proto.String(r.Description),
-				RowID:       proto.String(rowId),
+			section.Rows = append(section.Rows, nativeFlowListRow{
+				Title:       r.Title,
+				Description: r.Description,
+				ID:          rowID,
 			})
 		}
-		sections = append(sections, &waE2E.ListMessage_Section{
-			Title: proto.String(sectionTitle),
-			Rows:  rows,
-		})
+		params.Sections = append(params.Sections, section)
+	}
+	paramsJSON, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
 	}
 
-	listType := waE2E.ListMessage_SINGLE_SELECT
-	listMessage := &waE2E.ListMessage{
-		Title:       proto.String(data.Title),
-		Description: proto.String(data.Description),
-		ButtonText:  proto.String(buttonText),
-		FooterText:  proto.String(data.FooterText),
-		ListType:    &listType,
-		Sections:    sections,
+	body := data.Description
+	if data.Title != "" {
+		body = "*" + data.Title + "*"
+		if data.Description != "" {
+			body += "\n\n" + data.Description
+		}
 	}
+	messageParamsJSON := `{"from":"api","templateId":` + templateId + `}`
 
-	// Wrap ListMessage in DocumentWithCaptionMessage (Baileys PR #36) so modern WhatsApp renders it.
-	// MessageSecret (32 random bytes) is required for iOS rendering.
-	listMsgSecret := make([]byte, 32)
-	_, _ = crypto_rand.Read(listMsgSecret)
-
-	msg := &waE2E.Message{
-		DocumentWithCaptionMessage: &waE2E.FutureProofMessage{
-			Message: &waE2E.Message{
-				ListMessage: listMessage,
+	interactiveMsg := &waE2E.InteractiveMessage{
+		Body: &waE2E.InteractiveMessage_Body{Text: proto.String(body)},
+		InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
+			NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+				Buttons: []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{{
+					Name:             proto.String("single_select"),
+					ButtonParamsJSON: proto.String(string(paramsJSON)),
+				}},
+				MessageParamsJSON: proto.String(messageParamsJSON),
+				MessageVersion:    proto.Int32(1),
 			},
 		},
-		MessageContextInfo: &waE2E.MessageContextInfo{
-			MessageSecret: listMsgSecret,
-		},
+		ContextInfo: &waE2E.ContextInfo{},
+	}
+	// Rodapé só quando preenchido (compatibilidade iOS, igual SendButton).
+	if data.FooterText != "" {
+		interactiveMsg.Footer = &waE2E.InteractiveMessage_Footer{Text: proto.String(data.FooterText)}
 	}
 
-	// Build biz <list> node — required for mobile rendering of modern lists.
-	// type MUST be "product_list" regardless of the protobuf ListType — WhatsApp
-	// server rejects "single_select" with error 405 (see docs/local-interactive-go-test-runbook.md).
-	listBizNodes := []waBinary.Node{
-		{
-			Tag: "biz",
-			Content: []waBinary.Node{{
-				Tag: "list",
-				Attrs: waBinary.Attrs{
-					"v":    "2",
-					"type": "product_list",
-				},
-			}},
-		},
-	}
-	if !strings.Contains(data.Number, "@g.us") {
-		listBizNodes = append(listBizNodes, waBinary.Node{
-			Tag:   "bot",
-			Attrs: waBinary.Attrs{"biz_bot": "1"},
-		})
+	return &waE2E.Message{InteractiveMessage: interactiveMsg}, nil
+}
+
+func (s *sendService) SendList(data *ListStruct, instance *instance_model.Instance) (*MessageSendStruct, error) {
+	templateId := strconv.FormatInt(time.Now().UnixNano()/1000000, 10)
+	msg, err := buildNativeFlowListMessage(data, templateId)
+	if err != nil {
+		return nil, err
 	}
 
-	message, err := s.SendMessage(instance, msg, "ListMessage", &SendDataStruct{
+	// Mesmo nó <biz> do SendButton (native_flow "mixed").
+	listBizNodes := []waBinary.Node{{
+		Tag:   "biz",
+		Attrs: waBinary.Attrs{},
+		Content: []waBinary.Node{{
+			Tag:   "interactive",
+			Attrs: waBinary.Attrs{"type": "native_flow", "v": "1"},
+			Content: []waBinary.Node{
+				{Tag: "native_flow", Attrs: waBinary.Attrs{"v": "9", "name": "mixed"}},
+			},
+		}},
+	}}
+
+	message, err := s.SendMessage(instance, msg, "InteractiveMessage", &SendDataStruct{
 		Number:          data.Number,
 		Delay:           data.Delay,
 		MentionAll:      data.MentionAll,
@@ -2258,7 +2274,6 @@ func (s *sendService) SendList(data *ListStruct, instance *instance_model.Instan
 		Quoted:          data.Quoted,
 		AdditionalNodes: &listBizNodes,
 	})
-
 	if err != nil {
 		s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Error sending list: %v", instance.Id, err)
 		return nil, err
