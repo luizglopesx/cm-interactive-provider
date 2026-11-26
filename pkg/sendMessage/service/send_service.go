@@ -2215,11 +2215,8 @@ func buildNativeFlowListMessage(data *ListStruct, templateId string) (*waE2E.Mes
 	}
 
 	body := data.Description
-	if data.Title != "" {
-		body = "*" + data.Title + "*"
-		if data.Description != "" {
-			body += "\n\n" + data.Description
-		}
+	if body == "" {
+		body = data.Title
 	}
 	messageParamsJSON := `{"from":"api","templateId":` + templateId + `}`
 
@@ -2237,12 +2234,30 @@ func buildNativeFlowListMessage(data *ListStruct, templateId string) (*waE2E.Mes
 		},
 		ContextInfo: &waE2E.ContextInfo{},
 	}
+	if data.Title != "" {
+		interactiveMsg.Header = &waE2E.InteractiveMessage_Header{
+			Title:              proto.String(data.Title),
+			HasMediaAttachment: proto.Bool(false),
+		}
+	}
 	// Rodapé só quando preenchido (compatibilidade iOS, igual SendButton).
 	if data.FooterText != "" {
 		interactiveMsg.Footer = &waE2E.InteractiveMessage_Footer{Text: proto.String(data.FooterText)}
 	}
 
-	return &waE2E.Message{InteractiveMessage: interactiveMsg}, nil
+	// Embrulho ViewOnce + DeviceListMetadata v2: o InteractiveMessage "solto" com
+	// single_select saiu com sucesso em 2026-11-25 e não apareceu no iPhone.
+	return &waE2E.Message{
+		ViewOnceMessage: &waE2E.FutureProofMessage{
+			Message: &waE2E.Message{
+				MessageContextInfo: &waE2E.MessageContextInfo{
+					DeviceListMetadata:        &waE2E.DeviceListMetadata{},
+					DeviceListMetadataVersion: proto.Int32(2),
+				},
+				InteractiveMessage: interactiveMsg,
+			},
+		},
+	}, nil
 }
 
 func (s *sendService) SendList(data *ListStruct, instance *instance_model.Instance) (*MessageSendStruct, error) {

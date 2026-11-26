@@ -23,9 +23,16 @@ func TestBuildNativeFlowListMessage(t *testing.T) {
 	if msg.ListMessage != nil || msg.DocumentWithCaptionMessage != nil {
 		t.Fatal("lista não pode usar o ListMessage legado")
 	}
-	im := msg.GetInteractiveMessage()
-	if im.GetBody().GetText() != "*Teste*\n\nEscolha" || im.GetFooter().GetText() != "Loja" {
-		t.Fatalf("body/footer inesperados: %q / %q", im.GetBody().GetText(), im.GetFooter().GetText())
+	if msg.InteractiveMessage != nil {
+		t.Fatal("lista deve ir embrulhada em ViewOnceMessage")
+	}
+	inner := msg.GetViewOnceMessage().GetMessage()
+	if inner.GetMessageContextInfo().GetDeviceListMetadataVersion() != 2 {
+		t.Fatal("esperado DeviceListMetadataVersion 2")
+	}
+	im := inner.GetInteractiveMessage()
+	if im.GetHeader().GetTitle() != "Teste" || im.GetBody().GetText() != "Escolha" || im.GetFooter().GetText() != "Loja" {
+		t.Fatalf("header/body/footer inesperados: %q / %q / %q", im.GetHeader().GetTitle(), im.GetBody().GetText(), im.GetFooter().GetText())
 	}
 	buttons := im.GetNativeFlowMessage().GetButtons()
 	if len(buttons) != 1 || buttons[0].GetName() != "single_select" {
@@ -45,7 +52,7 @@ func TestBuildNativeFlowListMessage(t *testing.T) {
 	// Rodapé vazio não cria Footer (iOS).
 	data.FooterText = ""
 	msg, _ = buildNativeFlowListMessage(data, "123")
-	if msg.GetInteractiveMessage().Footer != nil {
+	if msg.GetViewOnceMessage().GetMessage().GetInteractiveMessage().Footer != nil {
 		t.Fatal("rodapé vazio não deveria criar Footer")
 	}
 }
