@@ -1,10 +1,8 @@
-FROM golang:1.25-alpine AS build
+FROM golang:1.26.10-alpine AS build
 
 RUN apk update && apk add --no-cache git build-base libjpeg-turbo-dev libwebp-dev
 
 WORKDIR /build
-
-ENV GOTOOLCHAIN=auto
 
 # Copiar apenas arquivos de dependências primeiro para cachear o download
 COPY go.mod go.sum ./
@@ -20,8 +18,6 @@ ARG VERSION=dev
 RUN CGO_ENABLED=1 go build -ldflags "-X main.version=${VERSION}" -o server ./cmd/evolution-go
 
 FROM alpine:3.19.1 AS final
-
-LABEL org.opencontainers.image.source="https://github.com/luizglopesx/cm-interactive-provider"
 
 # poppler-utils provides pdftoppm, used to rasterize PDF page 1 for /send/media document thumbnails
 RUN apk update && apk add --no-cache tzdata ffmpeg libjpeg-turbo libwebp poppler-utils
